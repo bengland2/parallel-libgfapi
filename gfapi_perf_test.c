@@ -474,7 +474,7 @@ int main(int argc, char * argv[])
   mb_transferred = (float )total_io_count * recsz / KB_PER_MB;
   thru = mb_transferred * NSEC_PER_SEC / elapsed_time ;
   files_thru = files_done * NSEC_PER_SEC / elapsed_time;
-  if (files_done > 10) {
+  if (files_done < 10) {
     files_thru = 0.0;
   }
   printf("file transfers  = "UINT64DFMT"\n", files_done);
