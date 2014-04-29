@@ -247,6 +247,10 @@ int main(int argc, char * argv[])
   if (!workload_types[j]) usage2("invalid workload type %s", workload_str);
   workload_type = j;
 
+  if (filesz_kb < recsz) {
+    printf("     truncating record size %u KB to file size %lu KB\n", recsz, filesz_kb );
+    recsz = filesz_kb;
+  }
   max_io_requests = filesz_kb / recsz;
   if (workload_type == WL_RNDRD || workload_type == WL_RNDWR) {
     if (io_requests == 0) io_requests = max_io_requests;
