@@ -50,9 +50,9 @@ static glfs_t * glfs_p = NULL;
 
 void scallerr(char * msg)
 {
-	printf("%s : errno (%d)%s\n", msg, errno, strerror(errno));
+        printf("%s : errno (%d)%s\n", msg, errno, strerror(errno));
         if (glfs_p) glfs_fini(glfs_p);
-	exit(NOTOK); 
+        exit(NOTOK); 
 }
 
 /* if user inputs are wrong, print this and exit */
@@ -75,12 +75,14 @@ void usage2(const char * msg, const char * param)
         puts("GFAPI_LOAD (seq-wr)     - workload to apply, can be one of seq-wr, seq-rd, rnd-wr, rnd-rd, unlink");
         puts("GFAPI_IOREQ (0 = all)   - for random workloads , how many requests to issue");
         puts("GFAPI_DIRECT (0 = off)  - force use of O_DIRECT even for sequential reads/writes");
-	puts("GFAPI_FUSE (0 = false)  - if true, use POSIX (through FUSE) instead of libgfapi");
-	puts("GFAPI_TRCLVL (0 = none) - trace level specified in glfs_set_logging");
+        puts("GFAPI_FUSE (0 = false)  - if true, use POSIX (through FUSE) instead of libgfapi");
+        puts("GFAPI_TRCLVL (0 = none) - trace level specified in glfs_set_logging");
         puts("GFAPI_FILES (100)       - number of files to access");
         puts("GFAPI_STARTING_GUN (none) - touch this file to begin test after all processes are started");
         puts("GFAPI_STARTING_GUN_TIMEOUT (60) - each thread waits this many seconds for starting gun file before timing out");
         puts("GFAPI_FILES_PER_DIR (1000) - maximum files placed in a leaf directory");
+        puts("GFAPI_APPEND (0)        - if 1, then append to existing file, instead of creating it");
+        puts("GFAPI_OVERWRITE (0)     - if 1, then overwrite existing file, instead of creating it");
         /* puts("GFAPI_DIRS_PER_DIR (1000) - maximum subdirs placed in a directory"); */
         exit(NOTOK);
 }
@@ -91,21 +93,21 @@ void usage(const char * msg) { usage2(msg, NULL); }
 
 int getenv_int( const char * env_var, const int default_value)
 {
-	char * str_val = getenv(env_var);
-	int val = default_value;
-	if (str_val) val = atoi(str_val);
-	/* printf("getenv_int: returning value %d for variable %s\n", val, env_var); */
-	return val;
+        char * str_val = getenv(env_var);
+        int val = default_value;
+        if (str_val) val = atoi(str_val);
+        /* printf("getenv_int: returning value %d for variable %s\n", val, env_var); */
+        return val;
 }
 
 /* get an integer file size environment variable, returning default value if undefined */
 
 uint64_t getenv_size64_kb( const char * env_var, const uint64_t default_value)
 {
-	char * str_val = getenv(env_var);
-	uint64_t val = default_value;
+        char * str_val = getenv(env_var);
+        uint64_t val = default_value;
         int slen;
-	if (str_val) {
+        if (str_val) {
           slen = strlen(str_val);
           if (slen > 0) {
             char lastch = str_val[slen-1];
@@ -130,32 +132,32 @@ uint64_t getenv_size64_kb( const char * env_var, const uint64_t default_value)
             }
           }
         }
-	return val;
+        return val;
 }
 
 /* get a string environment variable, returning default value if undefined */
 
 char * getenv_str( const char * env_var, const char * default_value)
 {
-	char * str_val = getenv(env_var);
-	const char * val = default_value;
-	if (str_val) val = str_val;
+        char * str_val = getenv(env_var);
+        const char * val = default_value;
+        if (str_val) val = str_val;
         else if (!default_value) 
                 usage2("getenv_str: you must define environment variable %s", env_var);
-	/* printf("getenv_str: returning value %s for variable %s\n", val, env_var); */
-	return (char * )val;
+        /* printf("getenv_str: returning value %s for variable %s\n", val, env_var); */
+        return (char * )val;
 }
 
 /* get current time in nanosec */
 
 uint64_t gettime_ns(void)
 {
-	uint64_t ns;
-	struct timespec t;
+        uint64_t ns;
+        struct timespec t;
 
-	clock_gettime(CLOCK_REALTIME, &t);
-	ns = t.tv_nsec + 1000000000*t.tv_sec;
-	return ns;
+        clock_gettime(CLOCK_REALTIME, &t);
+        ns = t.tv_nsec + 1000000000*t.tv_sec;
+        return ns;
 }
 
 off_t * random_offset_sequence( uint64_t file_size_bytes, size_t record_size_bytes )
@@ -183,7 +185,7 @@ void get_next_path( int filenum, int files_per_dir, char * base_dir, char *next_
 
 int main(int argc, char * argv[])
 {
-  static const int create_flags = O_CREAT|O_EXCL|O_WRONLY;
+  int create_flags = O_WRONLY|O_EXCL|O_CREAT;
   char next_fname[1024] = {0};
   char ready_path[1024] = {0}, hostnamebuf[1024] = {0}, pidstr[100] = {0};
   glfs_fd_t * glfs_fd_p = NULL;
@@ -227,6 +229,8 @@ int main(int argc, char * argv[])
   int fsync_at_close = getenv_int("GFAPI_FSYNC_AT_CLOSE", 0);
   int use_fuse = getenv_int("GFAPI_FUSE", 0);
   int o_direct = getenv_int("GFAPI_DIRECT", 0) ? O_DIRECT : 0;
+  int o_append = getenv_int("GFAPI_APPEND", 0);
+  int o_overwrite = getenv_int("GFAPI_OVERWRITE", 0);
   int filecount = getenv_int("GFAPI_FILES", 100);
   /* int dirs_per_dir = getenv_int("GFAPI_DIRS_PER_DIR", 1000); */
   int files_per_dir = getenv_int("GFAPI_FILES_PER_DIR", 1000);
@@ -236,7 +240,12 @@ int main(int argc, char * argv[])
          "\n  files/dir=%d\n  fsync-at-close? %s \n", 
                 workload_str, thrd_basedir, filesz_kb, filecount, recsz, files_per_dir, fsync_at_close?"Yes":"No");
   if (o_direct) printf("  forcing use of direct I/O with O_DIRECT flag in open call\n");
+  if (o_append) printf("  using O_APPEND flag to append to existing files\n");
+  if (o_overwrite) printf("  overwriting existing files\n");
   if (argc > 1) usage("glfs_io_test doesn't take command line parameters");
+  if (o_append && o_overwrite) usage("GFAPI_APPEND and GFAPI_OVERWRITE cannot be used in the same test");
+  create_flags |= o_direct;
+  if (o_append|o_overwrite) create_flags &= ~(O_EXCL|O_CREAT);
 
   /* validate inputs */
 
@@ -284,14 +293,16 @@ int main(int argc, char * argv[])
 
   /* use same random offset sequence for all files */
 
-  if (workload_type == WL_RNDWR || workload_type == WL_RNDRD)
-	random_offsets = random_offset_sequence( 
+  if (workload_type == WL_RNDWR || workload_type == WL_RNDRD) {
+    random_offsets = random_offset_sequence( 
                           (uint64_t )filesz_kb*BYTES_PER_KB, recsz*BYTES_PER_KB );
+  }
 
   /* wait for the starting gun file, which should be in parent directory */
   /* it is invoker's responsibility to unlink the starting gun file before starting this program */
 
   if (strlen(starting_gun_file) > 0) {
+    static const int sg_create_flags = O_CREAT|O_EXCL|O_WRONLY;
     char ready_buf[1024] = {0};
 
     /* signal that we are ready */
@@ -309,11 +320,11 @@ int main(int argc, char * argv[])
     strcat(ready_path, ".ready");
     printf("signaling ready with file %s\n", ready_path);
     if (use_fuse) {
-      ready_fd = open(ready_path, create_flags, 0666);
+      ready_fd = open(ready_path, sg_create_flags, 0666);
       if (ready_fd < 0) scallerr(ready_path);
       close(ready_fd);
     } else {
-      ready_fd_p = glfs_creat(glfs_p, ready_path, create_flags, 0644);
+      ready_fd_p = glfs_creat(glfs_p, ready_path, sg_create_flags, 0644);
       if (!ready_fd_p) scallerr(ready_path);
       glfs_close(ready_fd_p);
     }
@@ -350,64 +361,79 @@ int main(int argc, char * argv[])
    if (use_fuse) {
      switch (workload_type) {
       case WL_SEQWR: 
-        fd = open(next_fname, O_CREAT|O_EXCL|O_WRONLY|o_direct, 0666);
+        fd = open(next_fname, create_flags, 0666);
         if ((fd < OK) && (errno == ENOENT)) {
           char subdir[1024];
           strcpy(subdir, dirname(next_fname));
           rc = mkdir(subdir, 0755);
           if (rc < OK) scallerr(subdir);
+          /* we have to reconstruct filename because dirname() function sticks null into it */
           get_next_path( k, files_per_dir, thrd_basedir, next_fname );
-          fd = open(next_fname, O_CREAT|O_EXCL|O_WRONLY|o_direct, 0666);
+          fd = open(next_fname, create_flags, 0666);
         }
         if (fd < OK) scallerr(next_fname);
-	break;
+        if (o_append) {
+          rc = lseek( fd, 0, SEEK_END);
+          if (rc < OK) scallerr(next_fname);
+        }
+        break;
 
       case WL_SEQRD:
         fd = open(next_fname, O_RDONLY|o_direct);
         if (fd < OK) scallerr(next_fname);
-	break;
+        break;
 
       case WL_RNDWR:
-	fd = open(next_fname, O_WRONLY|o_direct);
-	if (fd < OK) scallerr(next_fname);
-	break;
+        fd = open(next_fname, O_WRONLY|o_direct);
+        if (fd < OK) scallerr(next_fname);
+        break;
 
       case WL_RNDRD:
-	fd = open(next_fname, O_RDONLY|o_direct);
-	if (fd < OK) scallerr(next_fname);
-	break;
+        fd = open(next_fname, O_RDONLY|o_direct);
+        if (fd < OK) scallerr(next_fname);
+        break;
 
       default: exit(NOTOK);
      }
    } else {
      switch (workload_type) {
       case WL_SEQWR: 
-	glfs_fd_p = glfs_creat(glfs_p, next_fname, O_CREAT|O_EXCL|O_WRONLY|o_direct, 0666 );
-        if ((!glfs_fd_p) && (errno == ENOENT)) {
-          char subdir[1024];
-          strcpy(subdir, dirname(next_fname));
-          rc = glfs_mkdir(glfs_p, subdir, 0755);
-          if (rc < OK) scallerr(subdir);
-          get_next_path( k, files_per_dir, thrd_basedir, next_fname );
-          glfs_fd_p = glfs_creat(glfs_p, next_fname, O_CREAT|O_EXCL|O_WRONLY|o_direct, 0666);
+        if (o_append|o_overwrite) {
+          glfs_fd_p = glfs_open(glfs_p, next_fname, create_flags );
+          if (!glfs_fd_p) scallerr(next_fname);
+          if (o_append) {
+            rc = glfs_lseek( glfs_fd_p, 0, SEEK_END);
+            if (rc < OK) scallerr(next_fname);
+          }
+        } else {
+          glfs_fd_p = glfs_creat(glfs_p, next_fname, create_flags, 0666 );
+          if ((!glfs_fd_p) && (errno == ENOENT)) {
+            char subdir[1024];
+            strcpy(subdir, dirname(next_fname));
+            rc = glfs_mkdir(glfs_p, subdir, 0755);
+            if (rc < OK) scallerr(subdir);
+            /* we have to reconstruct filename because dirname() function sticks null into it */
+            get_next_path( k, files_per_dir, thrd_basedir, next_fname );
+            glfs_fd_p = glfs_creat(glfs_p, next_fname, create_flags, 0666);
+          }
+          if (!glfs_fd_p) scallerr(next_fname);
         }
-	if (!glfs_fd_p) scallerr(next_fname);
-	break;
+        break;
 
       case WL_SEQRD:
         glfs_fd_p = glfs_open(glfs_p, next_fname, O_RDONLY|o_direct);
         if (!glfs_fd_p) scallerr(next_fname);
-	break;
+        break;
 
       case WL_RNDWR:
-	glfs_fd_p = glfs_open(glfs_p, next_fname, O_WRONLY|o_direct);
-	if (!glfs_fd_p) scallerr(next_fname);
-	break;
+        glfs_fd_p = glfs_open(glfs_p, next_fname, O_WRONLY|o_direct);
+        if (!glfs_fd_p) scallerr(next_fname);
+        break;
 
       case WL_RNDRD:
-	glfs_fd_p = glfs_open(glfs_p, next_fname, O_RDONLY|o_direct);
-	if (!glfs_fd_p) scallerr(next_fname);
-	break;
+        glfs_fd_p = glfs_open(glfs_p, next_fname, O_RDONLY|o_direct);
+        if (!glfs_fd_p) scallerr(next_fname);
+        break;
 
       default: exit(NOTOK);
      }
@@ -424,31 +450,31 @@ int main(int argc, char * argv[])
         write(fd, buf, bytes_to_xfer) :
         glfs_write(glfs_fd_p, buf, bytes_to_xfer, 0);
       if (bytes_xferred < bytes_to_xfer) 
-		scallerr(use_fuse?"write":"glfs_write");
+                scallerr(use_fuse?"write":"glfs_write");
 
     } else if (workload_type == WL_SEQRD) {
       offset += bytes_to_xfer;
       bytes_xferred = use_fuse ? 
-	read(fd, buf, bytes_to_xfer) :
-	glfs_read(glfs_fd_p, buf, bytes_to_xfer, 0);
+        read(fd, buf, bytes_to_xfer) :
+        glfs_read(glfs_fd_p, buf, bytes_to_xfer, 0);
       if (bytes_xferred < bytes_to_xfer) 
-		scallerr(use_fuse?"read":"glfs_read");
+                scallerr(use_fuse?"read":"glfs_read");
 
     } else if (workload_type == WL_RNDWR) {
       offset = random_offsets[io_count];
       bytes_xferred = use_fuse ?
-	pwrite(fd, buf, bytes_to_xfer, offset) :
-	glfs_pwrite(glfs_fd_p, buf, bytes_to_xfer, offset, 0);
+        pwrite(fd, buf, bytes_to_xfer, offset) :
+        glfs_pwrite(glfs_fd_p, buf, bytes_to_xfer, offset, 0);
       if (bytes_xferred < bytes_to_xfer) 
-		scallerr(use_fuse?"pwrite":"glfs_pwrite");
+                scallerr(use_fuse?"pwrite":"glfs_pwrite");
 
     } else if (workload_type == WL_RNDRD) {
       offset = random_offsets[io_count];
       bytes_xferred = use_fuse ? 
-	pread(fd, buf, bytes_to_xfer, offset) :
-	glfs_pread(glfs_fd_p, buf, bytes_to_xfer, offset, 0);
+        pread(fd, buf, bytes_to_xfer, offset) :
+        glfs_pread(glfs_fd_p, buf, bytes_to_xfer, offset, 0);
       if (bytes_xferred < bytes_to_xfer) 
-		scallerr(use_fuse?"pwrite":"glfs_pwrite");
+                scallerr(use_fuse?"pwrite":"glfs_pwrite");
     }
     total_bytes_xferred += bytes_xferred;
     if (debug) printf("offset %-20ld, io_count %-10u total_bytes_xferred %-20ld\n", 
