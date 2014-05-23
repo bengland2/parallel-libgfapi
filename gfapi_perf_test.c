@@ -27,6 +27,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include "glfs.h"
 
@@ -83,6 +84,8 @@ void usage2(const char * msg, const char * param)
         puts("GFAPI_FILES_PER_DIR (1000) - maximum files placed in a leaf directory");
         puts("GFAPI_APPEND (0)        - if 1, then append to existing file, instead of creating it");
         puts("GFAPI_OVERWRITE (0)     - if 1, then overwrite existing file, instead of creating it");
+        puts("GFAPI_PREFIX (none)     - insert string in front of filename");
+        puts("GFAPI_USEC_DELAY_PER_FILE (0) - if non-zero, then sleep this many microseconds after each file is accessed");
         /* puts("GFAPI_DIRS_PER_DIR (1000) - maximum subdirs placed in a directory"); */
         exit(NOTOK);
 }
@@ -177,10 +180,10 @@ off_t * random_offset_sequence( uint64_t file_size_bytes, size_t record_size_byt
         return offset_sequence;
 }
 
-void get_next_path( int filenum, int files_per_dir, char * base_dir, char *next_fname  )
+void get_next_path( const int filenum, const int files_per_dir, const char * base_dir, const char * prefix, char *next_fname  )
 {
    int subdir = filenum / files_per_dir;
-   sprintf(next_fname, "%s/d%04d/f.%07d", base_dir, subdir, filenum);
+   sprintf(next_fname, "%s/d%04d/%s.%07d", base_dir, subdir, prefix, filenum);
 }
 
 int main(int argc, char * argv[])
@@ -221,6 +224,7 @@ int main(int argc, char * argv[])
   int glfs_portnum = getenv_int("GFAPI_PORT", 24007);
   int recsz = getenv_int("GFAPI_RECSZ", 64);
   uint64_t filesz_kb = getenv_size64_kb("GFAPI_FSZ", 1024);
+  char * prefix = getenv_str("GFAPI_PREFIX", "f");
   char * thrd_basedir = getenv_str("GFAPI_BASEDIR", "/tmp" );
   char * starting_gun_file = getenv_str("GFAPI_STARTING_GUN", "");
   char * workload_str = getenv_str("GFAPI_LOAD", "seq-wr");  
@@ -232,16 +236,19 @@ int main(int argc, char * argv[])
   int o_append = getenv_int("GFAPI_APPEND", 0);
   int o_overwrite = getenv_int("GFAPI_OVERWRITE", 0);
   int filecount = getenv_int("GFAPI_FILES", 100);
+  int usec_delay_per_file = getenv_int("GFAPI_USEC_DELAY_PER_FILE", 0);
   /* int dirs_per_dir = getenv_int("GFAPI_DIRS_PER_DIR", 1000); */
   int files_per_dir = getenv_int("GFAPI_FILES_PER_DIR", 1000);
   printf("GLUSTER: \n  volume=%s\n  transport=%s\n  host=%s\n  port=%d\n  fuse?%s\n  trace level=%d\n  start timeout=%d\n", 
                 glfs_volname, glfs_transport, glfs_hostname, glfs_portnum, use_fuse ? "Yes" : "No", trclvl, starting_gun_timeout );
-  printf("WORKLOAD:\n  type = %s \n  base directory = %s\n  file size = "UINT64DFMT" KB\n  file count = %d\n  record size = %u KB"
+  printf("WORKLOAD:\n  type = %s \n  base directory = %s\n  prefix=%s\n"
+         "file size = "UINT64DFMT" KB\n  file count = %d\n  record size = %u KB"
          "\n  files/dir=%d\n  fsync-at-close? %s \n", 
-                workload_str, thrd_basedir, filesz_kb, filecount, recsz, files_per_dir, fsync_at_close?"Yes":"No");
+                workload_str, thrd_basedir, prefix, filesz_kb, filecount, recsz, files_per_dir, fsync_at_close?"Yes":"No");
   if (o_direct) printf("  forcing use of direct I/O with O_DIRECT flag in open call\n");
   if (o_append) printf("  using O_APPEND flag to append to existing files\n");
   if (o_overwrite) printf("  overwriting existing files\n");
+  if (usec_delay_per_file) printf("  sleeping %d microsec after each file access\n", usec_delay_per_file);
   if (argc > 1) usage("glfs_io_test doesn't take command line parameters");
   if (o_append && o_overwrite) usage("GFAPI_APPEND and GFAPI_OVERWRITE cannot be used in the same test");
   create_flags |= o_direct;
@@ -354,7 +361,7 @@ int main(int argc, char * argv[])
 
   start_time = gettime_ns();
   FOREACH(k, filecount) {
-   get_next_path( k, files_per_dir, thrd_basedir, next_fname );
+   get_next_path( k, files_per_dir, thrd_basedir, prefix, next_fname );
    if (debug) printf("starting file %s\n", next_fname);
    fd = -2;
    glfs_fd_p = NULL;
@@ -368,7 +375,7 @@ int main(int argc, char * argv[])
           rc = mkdir(subdir, 0755);
           if (rc < OK) scallerr(subdir);
           /* we have to reconstruct filename because dirname() function sticks null into it */
-          get_next_path( k, files_per_dir, thrd_basedir, next_fname );
+          get_next_path( k, files_per_dir, thrd_basedir, prefix, next_fname );
           fd = open(next_fname, create_flags, 0666);
         }
         if (fd < OK) scallerr(next_fname);
@@ -413,7 +420,7 @@ int main(int argc, char * argv[])
             rc = glfs_mkdir(glfs_p, subdir, 0755);
             if (rc < OK) scallerr(subdir);
             /* we have to reconstruct filename because dirname() function sticks null into it */
-            get_next_path( k, files_per_dir, thrd_basedir, next_fname );
+            get_next_path( k, files_per_dir, thrd_basedir, prefix, next_fname );
             glfs_fd_p = glfs_creat(glfs_p, next_fname, create_flags, 0666);
           }
           if (!glfs_fd_p) scallerr(next_fname);
@@ -490,6 +497,12 @@ int main(int argc, char * argv[])
    }
    rc = use_fuse ? close(fd) : glfs_close(glfs_fd_p);
    if (rc) scallerr(use_fuse ? "close" : "glfs_close");
+   if (usec_delay_per_file) {
+     struct timeval tval = {0};
+     tval.tv_usec = usec_delay_per_file;
+     rc = select( 0, NULL, NULL, NULL, &tval );
+     if (rc < OK) scallerr("select");
+   }
    files_done++;
   }
   end_time = gettime_ns();
