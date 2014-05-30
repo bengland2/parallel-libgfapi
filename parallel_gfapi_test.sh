@@ -13,16 +13,19 @@
 #
 #threads=16
 threads=${PGFAPI_THREADS:-4}
-files=${PGFAPI_FILES:-16}
-filesize_kb=16384
-recordsize_kb=64
+files=${PGFAPI_FILES:-10240}
+filesize_kb=4
+recordsize_kb=4
 clientFile=clients.list
-export GFAPI_VOLNAME=alu
-export GFAPI_HOSTNAME=gprfs017-10ge
+#clientFile=1cl.list
+export GFAPI_VOLNAME=scale
+export GFAPI_HOSTNAME=172.17.50.2
 export GFAPI_LOAD=${PGFAPI_LOAD:-seq-wr}
 export GFAPI_FUSE=${PGFAPI_FUSE:-0}
-MOUNTPOINT=/mnt/alu
-TOPDIR=${PGFAPI_TOPDIR:-/test}
+export GFAPI_APPEND=${PGFAPI_APPEND:-0}
+export GFAPI_OVERWRITE=${PGFAPI_OVERWRITE:-0}
+MOUNTPOINT=/mnt/scale
+TOPDIR=${PGFAPI_TOPDIR:-/smf-gfapi}
 # if you want to use Gluster mountpoint as common directory that's ok
 PER_THREAD_PROGRAM=/root/gfapi_perf_test
 export GFAPI_DIRECT=${PGFAPI_DIRECT:-0}
@@ -83,7 +86,7 @@ mkdir -p $ALL_LOGS_DIR
 
 # if write test then remove files from each per-thread directory tree in parallel
 
-if [ "$GFAPI_LOAD" = "seq-wr" ] ; then
+if [ "$GFAPI_LOAD" = "seq-wr" -a "$GFAPI_APPEND" = "0" -a "$GFAPI_OVERWRITE" = 0 ] ; then
  for c in $clients ; do
   for n in `seq -f "%02g" 1 $threads` ; do 
    d=$TOPDIR/smf-gfapi-${c}.$n
@@ -92,6 +95,7 @@ if [ "$GFAPI_LOAD" = "seq-wr" ] ; then
   done
  done
  for p in $rmpids ; do wait $p ; done
+ rm -f $TOPDIR/*.ready
 fi
 sync
 sleep 2
@@ -113,6 +117,12 @@ for c in $clients ; do
   export GFAPI_FILES=$files
   mkdir -p $MOUNTPOINT/$d
   glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+  if [ -n "$GFAPI_APPEND" ] ; then
+    glfs_cmd="GFAPI_APPEND=$GFAPI_APPEND $glfs_cmd"
+  fi
+  if [ -n "$GFAPI_OVERWRITE" ] ; then
+    glfs_cmd="GFAPI_OVERWRITE=$GFAPI_OVERWRITE $glfs_cmd"
+  fi
   if [ -n "$GFAPI_DIRECT" ] ; then
     glfs_cmd="GFAPI_DIRECT=$GFAPI_DIRECT $glfs_cmd"
   fi
@@ -165,7 +175,7 @@ for p in $pids ; do
 done
 echo "`date`: clients completed"
 if [ $status != $OK ] ; then
-  echo "ERROR: at least one process exited with error status $s"
+  echo "ERROR: at least one process exited with error status $status"
 fi
 
 # report results
