@@ -285,11 +285,13 @@ int main(int argc, char * argv[])
   if (!buf) scallerr("posix_memalign");
 
   if (!use_fuse) {
+    char logfilename[100];
     /* mount volume */
     glfs_p = glfs_new(glfs_volname);
     if (!glfs_p) scallerr("ERROR: could not initialize Gluster volume mount with volname");
 
-    if (glfs_set_logging(glfs_p, "glfs.log", trclvl)) scallerr("set_logging");
+    sprintf(logfilename, "/tmp/glfs-%d.log", getpid());
+    if (glfs_set_logging(glfs_p, logfilename, trclvl)) scallerr("set_logging");
   
     if (glfs_set_volfile_server( glfs_p, glfs_transport, glfs_hostname, glfs_portnum ))
         scallerr("ERROR: could not initialize gfapi mount");
