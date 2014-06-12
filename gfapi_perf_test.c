@@ -47,11 +47,20 @@
 
 static glfs_t * glfs_p = NULL;
 
+char * now_str(void) {
+        time_t now = time((time_t * )NULL);
+        char * timebuf = (char * )malloc(100);
+        if (!timebuf) return timebuf;
+        strcpy(timebuf, ctime(&now));
+        timebuf[strlen(timebuf)-1] = 0;
+        return timebuf; /* MEMORY LEAK, doesn't matter unless you do it a lot */
+}
+
 /* if system call error occurs, call this to print errno and then exit */
 
 void scallerr(char * msg)
 {
-        printf("%s : errno (%d)%s\n", msg, errno, strerror(errno));
+        printf("%s : %s : errno (%d)%s\n", now_str(), msg, errno, strerror(errno));
         if (glfs_p) glfs_fini(glfs_p);
         exit(NOTOK); 
 }
@@ -86,6 +95,7 @@ void usage2(const char * msg, const char * param)
         puts("GFAPI_OVERWRITE (0)     - if 1, then overwrite existing file, instead of creating it");
         puts("GFAPI_PREFIX (none)     - insert string in front of filename");
         puts("GFAPI_USEC_DELAY_PER_FILE (0) - if non-zero, then sleep this many microseconds after each file is accessed");
+        puts("GFAPI_FSYNC_AT_CLOSE (0) - if 1, then issue fsync() call on file before closing");
         /* puts("GFAPI_DIRS_PER_DIR (1000) - maximum subdirs placed in a directory"); */
         exit(NOTOK);
 }
