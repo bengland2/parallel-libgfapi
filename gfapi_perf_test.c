@@ -252,7 +252,7 @@ int main(int argc, char * argv[])
   printf("GLUSTER: \n  volume=%s\n  transport=%s\n  host=%s\n  port=%d\n  fuse?%s\n  trace level=%d\n  start timeout=%d\n", 
                 glfs_volname, glfs_transport, glfs_hostname, glfs_portnum, use_fuse ? "Yes" : "No", trclvl, starting_gun_timeout );
   printf("WORKLOAD:\n  type = %s \n  base directory = %s\n  prefix=%s\n"
-         "file size = "UINT64DFMT" KB\n  file count = %d\n  record size = %u KB"
+         "  file size = "UINT64DFMT" KB\n  file count = %d\n  record size = %u KB"
          "\n  files/dir=%d\n  fsync-at-close? %s \n", 
                 workload_str, thrd_basedir, prefix, filesz_kb, filecount, recsz, files_per_dir, fsync_at_close?"Yes":"No");
   if (o_direct) printf("  forcing use of direct I/O with O_DIRECT flag in open call\n");
@@ -337,19 +337,27 @@ int main(int argc, char * argv[])
     strcat(ready_path, ".");
     strcat(ready_path, pidstr);
     strcat(ready_path, ".ready");
+    printf("%s : ", now_str());
     printf("signaling ready with file %s\n", ready_path);
     if (use_fuse) {
       ready_fd = open(ready_path, sg_create_flags, 0666);
       if (ready_fd < 0) scallerr(ready_path);
-      close(ready_fd);
+      else {
+        rc = close(ready_fd);
+        if (rc < OK) scallerr("ready path close");
+      }
     } else {
       ready_fd_p = glfs_creat(glfs_p, ready_path, sg_create_flags, 0644);
       if (!ready_fd_p) scallerr(ready_path);
-      glfs_close(ready_fd_p);
+      else {
+        rc = glfs_close(ready_fd_p);
+        if (rc < OK) scallerr("ready path close");
+      }
     }
 
     /* wait until we are told to start the test, to give other threads time to get ready */
 
+    printf("%s : ", now_str());
     printf("awaiting starting gun file %s\n", starting_gun_file);
     FOREACH(sec, starting_gun_timeout) {
       rc = use_fuse ? stat(starting_gun_file, &st) : glfs_stat(glfs_p, starting_gun_file, &st);
@@ -362,6 +370,7 @@ int main(int argc, char * argv[])
       sleep(1);
     }
     if (sec == starting_gun_timeout) {
+      printf(now_str());
       printf("ERROR: timed out after %d sec waiting for starting gun file %s\n", 
              starting_gun_timeout, starting_gun_file);
       exit(NOTOK);
@@ -518,7 +527,6 @@ int main(int argc, char * argv[])
    files_done++;
   }
   end_time = gettime_ns();
-  if (!use_fuse) glfs_fini(glfs_p);
 
   /* calculate and print stats */
 
@@ -539,5 +547,9 @@ int main(int argc, char * argv[])
   printf("throughput      = %-9.2f MB/sec\n", thru);
   printf("file rate       = %-9.2f files/sec\n", files_thru);
   printf("IOPS            = %-9.2f (%s)\n", thru * 1024 / recsz, workload_description[workload_type]);
-  return 0;
+  if (!use_fuse) {
+    rc = glfs_fini(glfs_p);
+    if (rc < OK) scallerr("glfs_fini");
+  }
+  return OK;
 }
