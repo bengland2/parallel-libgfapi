@@ -173,6 +173,15 @@ uint64_t gettime_ns(void)
         return ns;
 }
 
+void sleep_for_usec( unsigned usec_delay_per_file )
+{
+     int rc;
+     struct timeval tval = {0};
+     tval.tv_usec = usec_delay_per_file;
+     rc = select( 0, NULL, NULL, NULL, &tval );
+     if (rc < OK) scallerr("select");
+}
+
 off_t * random_offset_sequence( uint64_t file_size_bytes, size_t record_size_bytes )
 {
         unsigned j;
@@ -212,11 +221,14 @@ int main(int argc, char * argv[])
   uint64_t start_time, end_time, elapsed_time;
   uint64_t files_done = 0, total_io_count = 0, total_bytes_xferred = 0;
   float thru, files_thru, mb_transferred;
-  const char * workload_types[] = { "seq-wr", "seq-rd", "rnd-wr", "rnd-rd", NULL };
+  /* last array element of workload_types must be NULL */
+  const char * workload_types[] = { "seq-wr", "seq-rd", "rnd-wr", "rnd-rd", "unlink", NULL };
 #define WL_SEQWR 0
 #define WL_SEQRD 1
 #define WL_RNDWR 2
 #define WL_RNDRD 3
+#define WL_DELETE 4
+
   const char * workload_description[] = { "sequential write", "sequential read", "random write", "random read", NULL };
   int workload_type; 
   uint64_t max_io_requests;
@@ -271,7 +283,7 @@ int main(int argc, char * argv[])
         break;
   }
   if (!workload_types[j]) usage2("invalid workload type %s", workload_str);
-  workload_type = j;
+  workload_type = j; /* one of WL_* codes */
 
   if (filesz_kb < recsz) {
     printf("     truncating record size %u KB to file size %lu KB\n", recsz, filesz_kb );
@@ -388,6 +400,11 @@ int main(int argc, char * argv[])
    glfs_fd_p = NULL;
    if (use_fuse) {
      switch (workload_type) {
+      case WL_DELETE:
+        rc = unlink(next_fname);
+        if (rc < OK && errno != ENOENT) scallerr(next_fname);
+        break;
+
       case WL_SEQWR: 
         fd = open(next_fname, create_flags, 0666);
         if ((fd < OK) && (errno == ENOENT)) {
@@ -425,6 +442,11 @@ int main(int argc, char * argv[])
      }
    } else {
      switch (workload_type) {
+      case WL_DELETE:
+        rc = glfs_unlink(glfs_p, next_fname);
+        if (rc < OK && errno != ENOENT) scallerr(next_fname);
+        break;
+
       case WL_SEQWR: 
         if (o_append|o_overwrite) {
           glfs_fd_p = glfs_open(glfs_p, next_fname, create_flags );
@@ -465,6 +487,11 @@ int main(int argc, char * argv[])
 
       default: exit(NOTOK);
      }
+   }
+   if (workload_type == WL_DELETE) {
+     if (usec_delay_per_file) sleep_for_usec(usec_delay_per_file);
+     files_done++;
+     continue;
    }
 
    /* perform the requested I/O operations */
@@ -518,12 +545,7 @@ int main(int argc, char * argv[])
    }
    rc = use_fuse ? close(fd) : glfs_close(glfs_fd_p);
    if (rc) scallerr(use_fuse ? "close" : "glfs_close");
-   if (usec_delay_per_file) {
-     struct timeval tval = {0};
-     tval.tv_usec = usec_delay_per_file;
-     rc = select( 0, NULL, NULL, NULL, &tval );
-     if (rc < OK) scallerr("select");
-   }
+   if (usec_delay_per_file) sleep_for_usec(usec_delay_per_file);
    files_done++;
   }
   end_time = gettime_ns();
@@ -544,9 +566,9 @@ int main(int argc, char * argv[])
   printf("I/O (record) transfers = "UINT64DFMT"\n", total_io_count);
   printf("total bytes = "UINT64DFMT"\n", total_bytes_xferred);
   printf("elapsed time    = %-9.2f sec\n", elapsed_time/NSEC_PER_SEC);
-  printf("throughput      = %-9.2f MB/sec\n", thru);
-  printf("file rate       = %-9.2f files/sec\n", files_thru);
-  printf("IOPS            = %-9.2f (%s)\n", thru * 1024 / recsz, workload_description[workload_type]);
+  if (thru > 0.0) printf("throughput      = %-9.2f MB/sec\n", thru);
+  if (files_thru > 0.0) printf("file rate       = %-9.2f files/sec\n", files_thru);
+  if (thru > 0.0) printf("IOPS            = %-9.2f (%s)\n", thru * 1024 / recsz, workload_description[workload_type]);
   if (!use_fuse) {
     rc = glfs_fini(glfs_p);
     if (rc < OK) scallerr("glfs_fini");
