@@ -10,21 +10,28 @@
 # PGFAPI_FUSE - defaults to 0, if 1 use equivalent POSIX fs calls instead of libgfapi
 # PGFAPI_DIRECT - defaults to 0, if 1 use O_DIRECT flag at open time
 # PGFAPI_TOPDIR - top directory used within the Gluster volume, default is /tmp
+# PGFAPI_CLIENTS - filename containing list of clients
+# PGFAPI_APPEND - defaults to 0, if 1 then append to file don't create it
+# PGFAPI_OVERWRITE - defaults to 0, if 1 then overwrite existing file don't create it
+# PGFAPI_FILESIZE - defaults to 4 (KB), number of KB to write or read per file
+# PGFAPI_EXTERNAL_START - if defined, then then let user fire the starting gun 
+#                           (allows multiple concurrent parallel_gfapi_test.sh runs)
 #
 #threads=16
+filesize_kb=${PGFAPI_FILESIZE:-4}
 threads=${PGFAPI_THREADS:-4}
 files=${PGFAPI_FILES:-10240}
-filesize_kb=4
-recordsize_kb=4
-clientFile=clients.list
-#clientFile=1cl.list
-export GFAPI_VOLNAME=scale
-export GFAPI_HOSTNAME=172.17.50.2
+recordsize_kb=${PGFAPI_RECORDSIZE:-64}
+clientFile=${PGFAPI_CLIENTS:-clients.list}
+export GFAPI_VOLNAME=alu-jbod3
+export GFAPI_HOSTNAME=gprfs045-10ge
 export GFAPI_LOAD=${PGFAPI_LOAD:-seq-wr}
 export GFAPI_FUSE=${PGFAPI_FUSE:-0}
 export GFAPI_APPEND=${PGFAPI_APPEND:-0}
 export GFAPI_OVERWRITE=${PGFAPI_OVERWRITE:-0}
-MOUNTPOINT=/mnt/scale
+export GFAPI_USEC_DELAY_PER_FILE=${PGFAPI_USEC_DELAY_PER_FILE:-1000}
+export GFAPI_STARTING_GUN_TIMEOUT=120
+MOUNTPOINT=/mnt/alu-jbod3
 TOPDIR=${PGFAPI_TOPDIR:-/smf-gfapi}
 # if you want to use Gluster mountpoint as common directory that's ok
 PER_THREAD_PROGRAM=/root/gfapi_perf_test
@@ -50,6 +57,12 @@ fi
 if [ $GFAPI_DIRECT = 1 ] ; then 
   echo "using direct I/O"
 fi
+if [ $GFAPI_OVERWRITE = 1 ] ; then
+  echo "overwriting existing files"
+fi
+if [ $GFAPI_APPEND = 1 ] ; then
+  echo "appending to existing files"
+fi
 if [ "$GFAPI_LOAD" = "rnd-wr" -o "$GFAPI_LOAD" = "rnd-rd" ] ; then
   echo "I/O requests per thread: $GFAPI_IOREQ"
 fi
@@ -57,18 +70,20 @@ clients="`cat $clientFile`"
 clientCnt=`cat $clientFile | wc -l `
 # if you want to use Gluster mountpoint as log directory, that's ok
 # PGFAPI_LOGDIR=$MOUNTPOINT/$TOPDIR/glfs_smf_logs
-export PGFAPI_LOGDIR=${TMPDIR:-/tmp}/parallel_gfapi_logs
+export PGFAPI_LOGDIR=${TMPDIR:-/tmp}/parallel_gfapi_logs.$$
 echo "log files for each libgfapi process at $PGFAPI_LOGDIR"
 
-starting_gun=start.tmp
-if [ "$GFAPI_FUSE" = 0 ] ; then
-  export GFAPI_STARTING_GUN=$TOPDIR/$starting_gun
-else
-  export GFAPI_STARTING_GUN=${MOUNTPOINT}$TOPDIR/$starting_gun
-fi
 (( start_gun_timeout = $clientCnt * $threads * 3 / 10 ))
 (( start_gun_timeout = $start_gun_timeout + 10 ))
 export GFAPI_STARTING_GUN_TIMEOUT=$start_gun_timeout
+echo "starting gun timeout = $GFAPI_STARTING_GUN_TIMEOUT"
+
+starting_gun=${PGFAPI_EXTERNAL_START:-$TOPDIR/start.tmp}
+if [ "$GFAPI_FUSE" = 0 ] ; then
+  GFAPI_STARTING_GUN=$starting_gun
+else
+  GFAPI_STARTING_GUN=${MOUNTPOINT}/$starting_gun
+fi
 
 # create empty directory tree
 
@@ -77,7 +92,7 @@ mkdir -p $MOUNTPOINT/$TOPDIR
 find $MOUNTPOINT/$TOPDIR -maxdepth 1 -name '*.ready' -delete
 rm -f $MOUNTPOINT/$TOPDIR/$GFAPI_STARTING_GUN
 find $MOUNTPOINT/$TOPDIR -maxdepth 1 -name '*.*.log' -delete
-rm -f $MOUNTPOINT/$TOPDIR/$starting_gun
+rm -f $MOUNTPOINT/$starting_gun
 
 ALL_LOGS_DIR=$PGFAPI_LOGDIR
 rm -rf $ALL_LOGS_DIR
@@ -87,18 +102,30 @@ mkdir -p $ALL_LOGS_DIR
 # if write test then remove files from each per-thread directory tree in parallel
 
 if [ "$GFAPI_LOAD" = "seq-wr" -a "$GFAPI_APPEND" = "0" -a "$GFAPI_OVERWRITE" = 0 ] ; then
+ thrdcnt=0
  for c in $clients ; do
+  ssh $c 'killall -INT -q rm ; sleep 1 ; killall -q rm'
   for n in `seq -f "%02g" 1 $threads` ; do 
    d=$TOPDIR/smf-gfapi-${c}.$n
-   eval "rm -rf $MOUNTPOINT/$d &"
+   glfs_cmd="GFAPI_LOAD=unlink GFAPI_FILES=$files GFAPI_BASEDIR=$d GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+   
+   eval "$glfs_cmd > /tmp/unlink.$c.$n.log 2>&1 &"
    rmpids="$rmpids $!"
+   (( thrdcnt = $thrdcnt + 1 ))
+   if [ $thrdcnt -gt 25 ] ; then
+     for p in $rmpids ; do wait $p ; done
+     rmpids=""
+     thrdcnt=0
+   fi
   done
+  ssh $c "rm -f /tmp/glfs-*.log /tmp/unlink.*.*.log"
  done
  for p in $rmpids ; do wait $p ; done
- rm -f $TOPDIR/*.ready
+ rm -f $TOPDIR/*.ready 
 fi
-sync
+par-for-all.sh servers.list 'sync'
 sleep 2
+export GFAPI_STARTING_GUN
 
 # start the threads
 
@@ -116,7 +143,7 @@ for c in $clients ; do
   export GFAPI_FSZ=${filesize_kb}k
   export GFAPI_FILES=$files
   mkdir -p $MOUNTPOINT/$d
-  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_USEC_DELAY_PER_FILE=$GFAPI_USEC_DELAY_PER_FILE GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
   if [ -n "$GFAPI_APPEND" ] ; then
     glfs_cmd="GFAPI_APPEND=$GFAPI_APPEND $glfs_cmd"
   fi
@@ -162,7 +189,12 @@ echo "`date`: clients are all ready"
 
 # start the test and wait for it to end
 
-touch $MOUNTPOINT/$TOPDIR/$starting_gun
+if [ -z $PGFAPI_EXTERNAL_START ] ; then 
+  touch $MOUNTPOINT/$starting_gun
+else
+  echo "waiting for external starting gun $PGFAPI_EXTERNAL_START ..."
+  while [ ! -f $MOUNTPOINT/$starting_gun ] ; do sleep 3 ; done
+fi
 echo "`date` : clients should all start running within a few seconds"
 status=$OK
 for p in $pids ; do
@@ -186,6 +218,6 @@ fi
   done ) > $ALL_LOGS_DIR/result.csv
 echo "per-thread results in $ALL_LOGS_DIR/result.csv"
 tail -n +2 $ALL_LOGS_DIR/result.csv | awk \
-      '{total_mbs += $2; total_fps+=$3; total_iops+=$4; threads+=1}END{printf "transfer-rate: %6.2f MBytes/s\nfile-rate: %8.2f files/sec\nIOPS:%8.2f requests/sec\n\n", total_mbs, total_fps, total_iops }'
+      '{ threads += 1 ; if ($3 != "") { total_mbs += $2; total_fps+=$3; total_iops+=$4; threads_done+=1}}END{printf "%d threads finished out of %d \ntransfer-rate: %6.2f MBytes/s\nfile-rate: %8.2f files/sec\nIOPS:%8.2f requests/sec\n\n", threads_done, threads, total_mbs, total_fps, total_iops }'
 
 exit $status
