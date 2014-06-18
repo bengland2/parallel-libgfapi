@@ -31,6 +31,7 @@ export GFAPI_APPEND=${PGFAPI_APPEND:-0}
 export GFAPI_OVERWRITE=${PGFAPI_OVERWRITE:-0}
 export GFAPI_USEC_DELAY_PER_FILE=${PGFAPI_USEC_DELAY_PER_FILE:-1000}
 export GFAPI_STARTING_GUN_TIMEOUT=120
+export GFAPI_FSYNC_AT_CLOSE=${PGFAPI_FSYNC_AT_CLOSE:-0}
 MOUNTPOINT=/mnt/alu-jbod3
 TOPDIR=${PGFAPI_TOPDIR:-/smf-gfapi}
 # if you want to use Gluster mountpoint as common directory that's ok
@@ -83,6 +84,7 @@ if [ "$GFAPI_FUSE" = 0 ] ; then
   GFAPI_STARTING_GUN=$starting_gun
 else
   GFAPI_STARTING_GUN=${MOUNTPOINT}/$starting_gun
+  GFAPI_BASEDIR=${MOUNTPOINT}/$GFAPI_BASEDIR
 fi
 
 # create empty directory tree
@@ -101,13 +103,17 @@ mkdir -p $ALL_LOGS_DIR
 
 # if write test then remove files from each per-thread directory tree in parallel
 
+echo "removing any previous files"
 if [ "$GFAPI_LOAD" = "seq-wr" -a "$GFAPI_APPEND" = "0" -a "$GFAPI_OVERWRITE" = 0 ] ; then
  thrdcnt=0
  for c in $clients ; do
   ssh $c 'killall -INT -q rm ; sleep 1 ; killall -q rm'
   for n in `seq -f "%02g" 1 $threads` ; do 
    d=$TOPDIR/smf-gfapi-${c}.$n
-   glfs_cmd="GFAPI_LOAD=unlink GFAPI_FILES=$files GFAPI_BASEDIR=$d GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+   if [ "$GFAPI_FUSE" = 1 ] ; then
+     d=${MOUNTPOINT}$d
+   fi
+   glfs_cmd="GFAPI_LOAD=unlink GFAPI_FUSE=$GFAPI_FUSE GFAPI_FILES=$files GFAPI_BASEDIR=$d GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
    
    eval "$glfs_cmd > /tmp/unlink.$c.$n.log 2>&1 &"
    rmpids="$rmpids $!"
@@ -131,10 +137,16 @@ export GFAPI_STARTING_GUN
 
 echo -n "`date`: starting $clientCnt clients ... "
 for c in $clients ; do
+ for n in `seq -f "%02g" 1 $threads` ; do 
+  mkdir -p ${MOUNTPOINT}$TOPDIR/smf-gfapi-${c}.$n
+ done
+done
+sleep 2
+for c in $clients ; do
  echo -n "$c "
  for n in `seq -f "%02g" 1 $threads` ; do 
   d=$TOPDIR/smf-gfapi-${c}.$n
-  if [ "$GFAPI_FUSE" = 0 ] ; then
+  if [ "$GFAPI_FUSE" != 1 ] ; then
     export GFAPI_BASEDIR=$d
   else
     export GFAPI_BASEDIR=${MOUNTPOINT}$d
@@ -142,8 +154,7 @@ for c in $clients ; do
   export GFAPI_RECSZ=$recordsize_kb
   export GFAPI_FSZ=${filesize_kb}k
   export GFAPI_FILES=$files
-  mkdir -p $MOUNTPOINT/$d
-  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_USEC_DELAY_PER_FILE=$GFAPI_USEC_DELAY_PER_FILE GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_USEC_DELAY_PER_FILE=$GFAPI_USEC_DELAY_PER_FILE GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_FSYNC_AT_CLOSE=$GFAPI_FSYNC_AT_CLOSE GFAPI_FUSE=$GFAPI_FUSE GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
   if [ -n "$GFAPI_APPEND" ] ; then
     glfs_cmd="GFAPI_APPEND=$GFAPI_APPEND $glfs_cmd"
   fi
