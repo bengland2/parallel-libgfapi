@@ -2,8 +2,12 @@
 #
 # parallel_gfapi_test.sh - script to run parallel gfapi_perf_test processes across a set of client hosts
 # 
+# this script depends on par-for-all.sh , a script that launches a command in parallel across a set of hosts
+# specified in a text file.
+# 
 # environment variables:
-# PGFAPI_THREADS - how many threads per client (default: 16)
+# PGFAPI_PROCESSES - how many processes per client (default: 16)
+# PGFAPI_THREADS_PER_PROC - how many POSIX threads per process (default: 1)
 # PGFAPI_FILES - number of files per thread to use (default 10000)
 # PGFAPI_LOAD - what kind of workload - seq-wr or seq-rd, default is seq-wr 
 #               "seq" = "sequential", "wr" = "write", "rd" = "read", 
@@ -19,7 +23,7 @@
 #
 #threads=16
 filesize_kb=${PGFAPI_FILESIZE:-4}
-threads=${PGFAPI_THREADS:-4}
+processes=${PGFAPI_PROCESSES:-4}
 files=${PGFAPI_FILES:-10240}
 recordsize_kb=${PGFAPI_RECORDSIZE:-64}
 clientFile=${PGFAPI_CLIENTS:-clients.list}
@@ -32,10 +36,12 @@ export GFAPI_OVERWRITE=${PGFAPI_OVERWRITE:-0}
 export GFAPI_USEC_DELAY_PER_FILE=${PGFAPI_USEC_DELAY_PER_FILE:-1000}
 export GFAPI_STARTING_GUN_TIMEOUT=120
 export GFAPI_FSYNC_AT_CLOSE=${PGFAPI_FSYNC_AT_CLOSE:-0}
+export GFAPI_RDPCT=${PGFAPI_RDPCT:-0}
+export GFAPI_THREADS_PER_PROC=${PGFAPI_THREADS_PER_PROC:-1}
 MOUNTPOINT=/mnt/alu-jbod3
 TOPDIR=${PGFAPI_TOPDIR:-/smf-gfapi}
 # if you want to use Gluster mountpoint as common directory that's ok
-PER_THREAD_PROGRAM=/root/gfapi_perf_test
+PROGRAM=/root/gfapi_perf_test
 export GFAPI_DIRECT=${PGFAPI_DIRECT:-0}
 export GFAPI_IOREQ=4096
 #
@@ -48,10 +54,11 @@ echo "list of clients in file: $clientFile"
 echo "record size (KB): $recordsize_kb"
 echo "file size (KB): $filesize_kb"
 echo "files per thread: $files"
-echo "threads per client: $threads"
+echo "processes per client: $processes"
+echo "threads per process: $GFAPI_THREADS_PER_PROC"
 echo "test driver glusterfs mountpoint: $MOUNTPOINT"
 echo "top directory within Gluster volume: $TOPDIR"
-echo "each thread (process) runs program at: $PER_THREAD_PROGRAM"
+echo "each thread (process) runs program at: $PROGRAM"
 if [ $GFAPI_FUSE = 1 ] ; then 
   echo "using Gluster FUSE mountpoints on each client"
 fi
@@ -74,7 +81,7 @@ clientCnt=`cat $clientFile | wc -l `
 export PGFAPI_LOGDIR=${TMPDIR:-/tmp}/parallel_gfapi_logs.$$
 echo "log files for each libgfapi process at $PGFAPI_LOGDIR"
 
-(( start_gun_timeout = $clientCnt * $threads * 3 / 10 ))
+(( start_gun_timeout = $clientCnt * $processes * $GFAPI_THREADS_PER_PROC * 3 / 10 ))
 (( start_gun_timeout = $start_gun_timeout + 10 ))
 export GFAPI_STARTING_GUN_TIMEOUT=$start_gun_timeout
 echo "starting gun timeout = $GFAPI_STARTING_GUN_TIMEOUT"
@@ -87,9 +94,15 @@ else
   GFAPI_BASEDIR=${MOUNTPOINT}/$GFAPI_BASEDIR
 fi
 
+OK=0
+NOTOK=1
+
+pace() {
+  ( echo "import time" ; echo "time.sleep($1)" ) | python
+}
+
 # create empty directory tree
 
-OK=0
 mkdir -p $MOUNTPOINT/$TOPDIR
 find $MOUNTPOINT/$TOPDIR -maxdepth 1 -name '*.ready' -delete
 rm -f $MOUNTPOINT/$TOPDIR/$GFAPI_STARTING_GUN
@@ -108,12 +121,12 @@ if [ "$GFAPI_LOAD" = "seq-wr" -a "$GFAPI_APPEND" = "0" -a "$GFAPI_OVERWRITE" = 0
  thrdcnt=0
  for c in $clients ; do
   ssh $c 'killall -INT -q rm ; sleep 1 ; killall -q rm'
-  for n in `seq -f "%02g" 1 $threads` ; do 
+  for n in `seq -f "%02g" 1 $processes ` ; do 
    d=$TOPDIR/smf-gfapi-${c}.$n
    if [ "$GFAPI_FUSE" = 1 ] ; then
      d=${MOUNTPOINT}$d
    fi
-   glfs_cmd="GFAPI_LOAD=unlink GFAPI_FUSE=$GFAPI_FUSE GFAPI_FILES=$files GFAPI_BASEDIR=$d GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+   glfs_cmd="GFAPI_LOAD=unlink GFAPI_FUSE=$GFAPI_FUSE GFAPI_FILES=$files GFAPI_BASEDIR=$d GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME GFAPI_THREADS_PER_PROC=$GFAPI_THREADS_PER_PROC $PROGRAM"
    
    eval "$glfs_cmd > /tmp/unlink.$c.$n.log 2>&1 &"
    rmpids="$rmpids $!"
@@ -137,14 +150,14 @@ export GFAPI_STARTING_GUN
 
 echo -n "`date`: starting $clientCnt clients ... "
 for c in $clients ; do
- for n in `seq -f "%02g" 1 $threads` ; do 
+ for n in `seq -f "%02g" 1 $processes` ; do 
   mkdir -p ${MOUNTPOINT}$TOPDIR/smf-gfapi-${c}.$n
  done
 done
 sleep 2
 for c in $clients ; do
  echo -n "$c "
- for n in `seq -f "%02g" 1 $threads` ; do 
+ for n in `seq -f "%02g" 1 $processes` ; do 
   d=$TOPDIR/smf-gfapi-${c}.$n
   if [ "$GFAPI_FUSE" != 1 ] ; then
     export GFAPI_BASEDIR=$d
@@ -154,7 +167,7 @@ for c in $clients ; do
   export GFAPI_RECSZ=$recordsize_kb
   export GFAPI_FSZ=${filesize_kb}k
   export GFAPI_FILES=$files
-  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_USEC_DELAY_PER_FILE=$GFAPI_USEC_DELAY_PER_FILE GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_FSYNC_AT_CLOSE=$GFAPI_FSYNC_AT_CLOSE GFAPI_FUSE=$GFAPI_FUSE GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME $PER_THREAD_PROGRAM"
+  glfs_cmd="GFAPI_STARTING_GUN=$GFAPI_STARTING_GUN GFAPI_STARTING_GUN_TIMEOUT=$GFAPI_STARTING_GUN_TIMEOUT GFAPI_LOAD=$GFAPI_LOAD GFAPI_USEC_DELAY_PER_FILE=$GFAPI_USEC_DELAY_PER_FILE GFAPI_RECSZ=$GFAPI_RECSZ GFAPI_FSZ=$GFAPI_FSZ GFAPI_FILES=$GFAPI_FILES GFAPI_BASEDIR=$GFAPI_BASEDIR GFAPI_FSYNC_AT_CLOSE=$GFAPI_FSYNC_AT_CLOSE GFAPI_FUSE=$GFAPI_FUSE GFAPI_VOLNAME=$GFAPI_VOLNAME GFAPI_HOSTNAME=$GFAPI_HOSTNAME GFAPI_RDPCT=$GFAPI_RDPCT GFAPI_THREADS_PER_PROC=$GFAPI_THREADS_PER_PROC $PROGRAM"
   if [ -n "$GFAPI_APPEND" ] ; then
     glfs_cmd="GFAPI_APPEND=$GFAPI_APPEND $glfs_cmd"
   fi
@@ -172,14 +185,14 @@ for c in $clients ; do
   fi
   eval "ssh -o StrictHostKeyChecking=no $c '$glfs_cmd' > $ALL_LOGS_DIR/$c.t$n.log 2>&1 &" 
   pids="$pids $!"
-  echo 'import time ; time.sleep(0.1)' | python
+  pace 0.1
  done
 done 
 echo 
 
 # wait for threads to reach starting gate
 
-(( totalThreads = $threads * $clientCnt ))
+(( totalThreads = $processes * $GFAPI_THREADS_PER_PROC * $clientCnt ))
 while [ 1 ] ; do 
   sleep 1
   threadsReady=`ls $MOUNTPOINT/$TOPDIR/*.ready | wc -l`
