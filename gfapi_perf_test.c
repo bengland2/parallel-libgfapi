@@ -562,9 +562,9 @@ int main(int argc, char * argv[])
   if (files_done < 10) {
     files_thru = 0.0;
   }
-  printf("file transfers  = "UINT64DFMT"\n", files_done);
-  printf("I/O (record) transfers = "UINT64DFMT"\n", total_io_count);
-  printf("total bytes = "UINT64DFMT"\n", total_bytes_xferred);
+  printf("files done = "UINT64DFMT"\n", files_done);
+  if (total_io_count > 0) printf("I/O (record) transfers = "UINT64DFMT"\n", total_io_count);
+  if (total_bytes_xferred > 0) printf("total bytes = "UINT64DFMT"\n", total_bytes_xferred);
   printf("elapsed time    = %-9.2f sec\n", elapsed_time/NSEC_PER_SEC);
   if (thru > 0.0) printf("throughput      = %-9.2f MB/sec\n", thru);
   if (files_thru > 0.0) printf("file rate       = %-9.2f files/sec\n", files_thru);
