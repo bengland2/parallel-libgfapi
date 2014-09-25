@@ -3,7 +3,7 @@
  *
  * install the glusterfs-api RPM before trying to compile and link
  *
- * to compile: gcc -pthreads -g -O0  -Wall --pedantic -o gfapi_perf_test -I /usr/include/glusterfs/api gfapi_perf_test.c  -lgfapi -lrt
+ * to compile: gcc -pthread -g -O0  -Wall --pedantic -o gfapi_perf_test -I /usr/include/glusterfs/api gfapi_perf_test.c  -lgfapi -lrt
  *
  * environment variables used as inputs, see usage() below
  *
@@ -386,13 +386,13 @@ void * gfapi_thread_run( void * void_result_p )
   if (prm.o_append|prm.o_overwrite) create_flags &= ~(O_EXCL|O_CREAT);
   FOREACH(k, prm.filecount) {
    int workload = prm.workload_type;
-   if (prm.debug) printf("starting file %s\n", next_fname);
    if (workload == WL_SEQRDWRMIX) {
      float rndsample = (float )(random() % 100);
      workload = (rndsample > prm.rdpct) ? WL_SEQWR : WL_SEQRD;
      if (prm.debug) printf("workload %s\n", workload_description[workload]);
    }
    get_next_path( k, prm.files_per_dir, result_p->thread_num, prm.thrd_basedir, prm.prefix, next_fname );
+   if (prm.debug) printf("starting file %s\n", next_fname);
    fd = -2;
    glfs_fd_p = NULL;
    if (prm.use_fuse) {
