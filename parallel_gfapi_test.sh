@@ -22,13 +22,17 @@
 #                           (allows multiple concurrent parallel_gfapi_test.sh runs)
 #
 #threads=16
+
+# process exit status codes
+OK=0
+NOTOK=1
+
+# all of these variables have defaults
 filesize_kb=${PGFAPI_FILESIZE:-4}
 processes=${PGFAPI_PROCESSES:-4}
 files=${PGFAPI_FILES:-10240}
 recordsize_kb=${PGFAPI_RECORDSIZE:-64}
 clientFile=${PGFAPI_CLIENTS:-clients.list}
-export GFAPI_VOLNAME=alu-jbod3
-export GFAPI_HOSTNAME=gprfs045-10ge
 export GFAPI_LOAD=${PGFAPI_LOAD:-seq-wr}
 export GFAPI_FUSE=${PGFAPI_FUSE:-0}
 export GFAPI_APPEND=${PGFAPI_APPEND:-0}
@@ -38,12 +42,29 @@ export GFAPI_STARTING_GUN_TIMEOUT=120
 export GFAPI_FSYNC_AT_CLOSE=${PGFAPI_FSYNC_AT_CLOSE:-0}
 export GFAPI_RDPCT=${PGFAPI_RDPCT:-0}
 export GFAPI_THREADS_PER_PROC=${PGFAPI_THREADS_PER_PROC:-1}
-MOUNTPOINT=/mnt/alu-jbod3
-TOPDIR=${PGFAPI_TOPDIR:-/smf-gfapi}
-# if you want to use Gluster mountpoint as common directory that's ok
-PROGRAM=/root/gfapi_perf_test
 export GFAPI_DIRECT=${PGFAPI_DIRECT:-0}
+PROGRAM=${PGFAPI_PROGRAM:-gfapi_perf_test}
+# GFAPI_IOREQ only used for random I/O tests
 export GFAPI_IOREQ=4096
+MOUNTPOINT=${PGFAPI_MOUNTPOINT:-/mnt/gfapi}
+TOPDIR=${PGFAPI_TOPDIR:-/gfapi-test}
+
+# validate that all parameters have been defined
+
+if [ -z "$GFAPI_VOLNAME" -o -z "$GFAPI_HOSTNAME" ] ; then
+  echo " you must specify GFAPI_VOLNAME and GFAPI_HOSTNAME environment variables"
+  exit $NOTOK
+fi
+# if you want to use Gluster mountpoint as common directory that's ok
+which $PROGRAM
+if [ $? !=  $OK ] ; then
+  echo "program $PROGRAM either does not exist (if absolute path) or is not in your PATH env. var. (if no directory specified)"
+  exit $NOTOK
+fi
+if [ ! -f $clientFile ] ; then 
+  echo "file $clientFile containing list of client hosts is not available"
+  exit $NOTOK
+fi
 #
 # NO EDITABLE PARAMETERS BELOW THIS LINE
 #
