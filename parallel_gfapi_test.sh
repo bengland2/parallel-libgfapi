@@ -163,7 +163,7 @@ if [ "$GFAPI_LOAD" = "seq-wr" -a "$GFAPI_APPEND" = "0" -a "$GFAPI_OVERWRITE" = 0
  for p in $rmpids ; do wait $p ; done
  rm -f $TOPDIR/*.ready 
 fi
-par-for-all.sh servers.list 'sync'
+./par-for-all.sh servers.list 'sync'
 sleep 2
 export GFAPI_STARTING_GUN
 
