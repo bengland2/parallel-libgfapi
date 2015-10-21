@@ -7,6 +7,11 @@
 # copyright is GNU GPL V3, for details read:
 #   https://tldrlegal.com/license/gnu-general-public-license-v3-%28gpl-3%29#fulltext
 #
+# Note: this tool uses a snapshot of javascript code from this project:
+#   https://github.com/distributed-system-analysis/pbench
+# but we do not support any use of this software outside of the graphing 
+# of the data generated below.
+#
 # script to read gluster volume profile output retrieved every N seconds
 # and generate operation rate graph from it
 #
@@ -14,6 +19,14 @@
 # so the tool creates a subdirectory just for each run of this analysis tool.
 # the directory name is just the name of the log file
 # with the suffix '_csvdir'
+#
+# to install:
+#   - extract javascript code from this tarball
+#      https://s3.amazonaws.com/ben.england/gvp-graph-javascript.tgz
+#   - if the directory containing your gluster volume output log is different, create a
+#   'static' symlink pointing to the static/ subdirectory you just extracted
+#     in the subdirectories where .csv and .html files live, you will see a 
+#     'static' softlink pointing to this symlink.
 #
 # input:
 #  this script expects input data to look like what this script produces:
@@ -34,21 +47,17 @@
 #  when we're all done reading in data,
 #  we then print it out in a format suitable for spreadsheet-based graphing
 #
-#  if we use pbench javascript graphing, then
+#  since we use pbench javascript graphing, then
 #  column 1 in the .csv is always the timestamp in milliseconds when
-#  that sample took place
+#  that sample took place.  This can be disabled with the environment variable
+#  SKIP_PBENCH_GRAPHING.
 #
-#  there are two statistics categories, each with a filename prefix:
-#  - cumulative - shows how average for entire sampling interval changes
-#  WARNING: cumulative does not work completely yet, call rates can't be
-#  computed correctly yet, so we don't output these yet.
-#  - interval - shows just averages within a single time interval
 #  the stat types are:
-#  - pct-lat - percentage latency
+#  - pct-lat - percentage latency consumed by this FOP (file operation)
 #  - avg-lat - average latency (usec)
 #  - min-lat - minimum latency (usec)
 #  - max-lat - maximum latency (usec)
-#  - calls - how many FOP requests have been processed
+#  - call-rate - how many FOP requests have been processed per second
 #  for each category, there are several kinds of .csv files produced:
 #  - for each FOP + stat type, we show per-brick results
 #  and results across all bricks
@@ -68,10 +77,10 @@
 #
 # the per-brick dictionary is indexed by a string
 # starting with 'cumul' or 'intvl' and ending with the FOP name
+# this isn't strictly necessary but provides latent support
+# for someday including cumulative stats as well as per-interval stats
 #
-# for either cumulative or per-interval stats
-# stats for the entire volume are rolled up using weighted averaging
-#
+# stats for the entire volume are rolled up using call rates for weighted averaging
 #
 
 import sys
@@ -86,11 +95,22 @@ import collections
 
 time_duration_types = ['cumulative', 'interval']
 stat_names = ['pct-lat', 'avg-lat', 'min-lat', 'max-lat', 'call-rate']
+directions = ['MBps-read', 'MBps-written']
 min_lat_infinity = 1.0e24
 
 # this environment variable lets you graph .csv files using pbench
 
-pbench_graphs = os.getenv('PBENCH_GRAPHING')
+pbench_graphs = True
+if os.getenv('SKIP_PBENCH_GRAPHING'): pbench_graphs = False
+
+# this is the list of graphs that will be produced
+
+graph_csvs = [
+    ('MBps-written', 'MB/sec written to Gluster bricks'), 
+    ('MBps-read', 'MB/sec read from Gluster bricks'),
+    ('vol_call-rate_allfop', 'volume-level FOP call rates'),
+    ('vol_pct-lat_allfop', 'percentage server-side latency by FOP')
+]
 
 # all gvp.sh-generated profiles are expected to have these parameters
 # we define them here to have global scope, and they are only changed
@@ -200,7 +220,6 @@ class BrickProfile:
 def usage(msg):
     print('ERROR: %s' % msg)
     print('usage: extract-glvolprof.py your-gluster-volume-profile.log')
-    print('see your-gluster-volume-profile.log.*.csv for results')
     sys.exit(1)
 
 
@@ -391,8 +410,9 @@ def get_interval(duration_type, interval_index):
 # normalize to MB/s with 3 decimal places so 1 KB/s/brick will show
 
 def gen_output_bytes(out_dir_path, duration_type):
+    bytes_per_MB = 1000000.0
     final_brick_ct = len(sorted_brick_names)
-    for direction in ['BYTES_READ', 'BYTES_WRITTEN']:
+    for direction in directions:
         # when we support cumulative data, then we can name files this way
         #direction_filename = duration_type + '_' + direction + '.csv'
         direction_filename = direction + '.csv'
@@ -412,13 +432,15 @@ def gen_output_bytes(out_dir_path, duration_type):
                 total_transfer = 0
                 for b in sorted_brick_names:  # for each brick
                     brick = bricks_in_interval[b]
-                    if direction == 'BYTES_READ':
+                    if direction.__contains__('read'):
                         transfer = brick.bytes_read
                     else:
                         transfer = brick.bytes_written
                     total_transfer += transfer
-                    transfer_fh.write('%-8.3d, ' % (transfer / rate_interval))
-                transfer_fh.write('%d\n' % (total_transfer / rate_interval))
+                    transfer_fh.write('%-8.3f, ' % 
+                        ((transfer/rate_interval)/bytes_per_MB))
+                transfer_fh.write('%-9.3f\n' % 
+                        ((total_transfer/rate_interval)/bytes_per_MB))
 
 
 # display per-FOP (file operation) stats,
@@ -428,7 +450,7 @@ def gen_per_fop_stats(out_dir_path, duration_type, stat):
     vol_fop_intervals = []
     for fop in sorted_fop_names:
         #per_fop_filename = duration_type + '_' + stat + '_' + fop + '.csv'
-        per_fop_filename = stat + '_' + fop + '.csv'
+        per_fop_filename = 'brick_' + stat + '_' + fop + '.csv'
         per_fop_path = join(out_dir_path, per_fop_filename)
         with open(per_fop_path, 'a') as fop_fh:
             hdr = ''
@@ -471,7 +493,7 @@ def gen_per_fop_stats(out_dir_path, duration_type, stat):
 
 def gen_fop_summary(dir_path, duration_type, stat, vol_fop_intervals):
     #vol_fop_profile_path = join(dir_path, duration_type + '_' + stat + '_allfop.csv')
-    vol_fop_profile_path = join(dir_path, stat + '_allfop.csv')
+    vol_fop_profile_path = join(dir_path, 'vol_' + stat + '_allfop.csv')
     with open(vol_fop_profile_path, 'w') as vol_fop_fh:
         if pbench_graphs:
             vol_fop_fh.write('timestamp_ms, ')
@@ -494,8 +516,83 @@ def gen_fop_summary(dir_path, duration_type, stat, vol_fop_intervals):
             vol_fop_fh.write('\n')
 
 
+# generate graphs in 
 # generate output files in separate directory from
 # data structure returned by parse_input
+
+next_graph_template='''
+    <div class="chart">
+      <h3 class="chart-header">%s
+        <button id="save1">Save as Image</button>
+        <div id="svgdataurl1"></div>
+      </h3>
+      <svg id="chart%d"></svg>
+      <canvas id="canvas1" style="display:none"></canvas>
+      <script>
+        constructChart("lineChart", %d, "%s", 0.00);
+      </script>
+    </div>
+'''
+
+def output_next_graph(graph_fh, gr_index):
+    (csv_filename, graph_description) = graph_csvs[gr_index]
+    gr_index += 1  # graph numbers start at 1
+    graph_fh.write( next_graph_template % (
+                    graph_description, gr_index, gr_index, csv_filename))
+
+# static content of HTML file
+
+header='''
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link href="static/css/v0.2/nv.d3.css" rel="stylesheet" type="text/css" media="all">
+    <link href="static/css/v0.2/pbench_utils.css" rel="stylesheet" type="text/css" media="all">
+    <script src="static/js/v0.2/function-bind.js"></script>
+    <script src="static/js/v0.2/fastdom.js"></script>
+    <script src="static/js/v0.2/d3.js"></script>
+    <script src="static/js/v0.2/nv.d3.js"></script>
+    <script src="static/js/v0.2/saveSvgAsPng.js"></script>
+    <script src="static/js/v0.2/pbench_utils.js"></script>
+  </head>
+  <body class="with-3d-shadow with-transitions">
+    <h2 class="page-header">gluster volume profile - summary graphs</h2>
+'''
+
+trailer='''
+  </body>
+</html>
+'''
+
+
+# generate graphs using header, trailer and graph template
+
+def gen_graphs(out_dir_path):
+    graph_path = join(out_dir_path, 'gvp-graphs.html')
+    with open(graph_path, 'w') as graph_fh:
+        graph_fh.write(header)
+        for j in range(0, len(graph_csvs)):
+            output_next_graph(graph_fh, j)
+        graph_fh.write(trailer)
+
+
+# make link to where javascript etc lives in unpacked tarball
+# ASSUMPTION is that output directory is a subdirectory of where this script
+# lives (not a sub-subdirectory).  Sorry but that's the only way to generate a
+# softlink that works when we copy the csvdir to a different location.
+
+def gen_static_softlink(out_dir_path):
+    saved_cwd = os.getcwd()
+    static_dir = join(saved_cwd, 'static')
+    if not os.path.exists(static_dir):
+        print('ERROR: sorry, the javascript directory "static" ' + 
+              'needs to be in same directory as this script, trying anyway...')
+    os.chdir(out_dir_path)
+    os.symlink(join('..', 'static'), 'static')
+    os.chdir(saved_cwd)
+
+# generate everything needed to view the graphs
 
 def generate_output(out_dir_path):
 
@@ -505,11 +602,20 @@ def generate_output(out_dir_path):
             vol_fop_intvls = gen_per_fop_stats(out_dir_path, t, s)
             gen_fop_summary(out_dir_path, t, s, vol_fop_intvls)
 
+    gen_graphs(out_dir_path)
+    gen_static_softlink(out_dir_path)
+
     sys.stdout.write('Gluster FOP types seen: ')
     for fop_name in sorted_fop_names:
-        sys.stdout.write(' %s' % fop_name)
+        sys.stdout.write(' ' + fop_name)
     sys.stdout.write('\n')
-    print('created Gluster statistics files in directory %s' % (out_dir_path))
+    sys.stdout.write('Gluster bricks seen: ')
+    for brick_name in sorted_brick_names:
+        sys.stdout.write(' ' + brick_name)
+    sys.stdout.write('\n')
+    print('created Gluster statistics files in directory %s' % out_dir_path)
+    print('graphs now available at browser URL file://%s/%s/gvp-graphs.html' \
+          % (os.getcwd(), out_dir_path))
 
 
 # the main program is kept in a subroutine so that it can run on Windows.
@@ -522,6 +628,5 @@ def main():
     parse_input(fn)
     outdir = make_out_dir(fn)
     generate_output(outdir)
-
 
 main()
