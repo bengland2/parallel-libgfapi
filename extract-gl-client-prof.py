@@ -95,8 +95,8 @@ if os.getenv('SKIP_PBENCH_GRAPHING'): pbench_graphs = False
 graph_csvs = [
     ('MBps-written', 'MB/sec written to Gluster volume'), 
     ('MBps-read', 'MB/sec read from Gluster volume'),
-    ('call-rate', 'application-side FOP call rates'),
-    ('pct-lat', 'percentage application-side latency by FOP')
+    ('call-rate', 'FOP call rates'),
+    ('pct-lat', 'percentage latency by FOP')
 ]
 
 # all gvp.sh-generated profiles are expected to have these parameters
@@ -134,24 +134,24 @@ class FopProfile:
     # use "-6.2f" instead of "%6.2f" so there are no leading spaces in record,
     # otherwise spreadsheet inserts colums at col. B
 
-    def write(self, file_handle, stat, duration):
+    def field2str(self, stat, duration):
         if stat == stat_names[0]:
-            file_handle.write('%-6.2f' % self.pct_lat)
+            return '%-6.2f' % self.pct_lat
         elif stat == stat_names[1]:
-            file_handle.write('%8.0f' % self.avg_lat)
+            return '%8.0f' % self.avg_lat
         elif stat == stat_names[2]:
             if self.min_lat == min_lat_infinity:
-                file_handle.write('')  # don't confuse spreadsheet/user
+                return ''  # don't confuse spreadsheet/user
             else:
-                file_handle.write('%8.0f' % self.min_lat)
+                return '%8.0f' % self.min_lat
         elif stat == stat_names[3]:
             if self.max_lat == 0:
-                file_handle.write('')
+                return ''
             else:
-                file_handle.write('%8.0f' % self.max_lat)
+                return '%8.0f' % self.max_lat
         elif stat == stat_names[4]:
             call_rate = self.calls / float(duration)
-            file_handle.write('%10.3f' % call_rate)
+            return '%10.3f' % call_rate
 
     # accumulate weighted sum of component profiles, will normalize them later
 
@@ -380,8 +380,7 @@ def gen_per_fop_stats(out_dir_path, stat, duration_type='interval'):
         hdr = ''
         if pbench_graphs:
             hdr += 'timestamp_ms, '
-        for b in sorted_fop_names:
-            hdr += '%s,' % b
+        hdr += ','.join(sorted_fop_names)
         hdr += '\n'
         fop_fh.write(hdr)
         for i in range(0, len(intervals)):
@@ -392,22 +391,23 @@ def gen_per_fop_stats(out_dir_path, stat, duration_type='interval'):
                 fop_stats = fops_in_interval[fop]
                 all_fop_profile.accumulate(fop_stats)
             all_fop_profile.normalize_sum()
-            print('intvl: %d' % i)
-            print('ALL FOPs: %s' % all_fop_profile)
+            #print('intvl: %d' % i)
+            #print('ALL FOPs: %s' % all_fop_profile)
             if pbench_graphs:
                 fop_fh.write('%d, ' % gen_timestamp_ms(i))
+            columns = []
             for fop in sorted_fop_names:
                 fop_stats = fops_in_interval[fop]
                 fop_stats.get_pct_lat(
                     all_fop_profile.avg_lat * all_fop_profile.calls)
-                print(fop_stats)
                 try:
                     fop_stats = fops_in_interval[fop]
                 except KeyError:
                     fops_in_interval[fop] = fop_stats
-                fop_stats.write(fop_fh, stat, interval_profile.duration)
-                fop_fh.write(',')
-            fop_fh.write('\n')
+                columns.append(
+                    fop_stats.field2str(
+                        stat, interval_profile.duration))
+            fop_fh.write(','.join(columns) + '\n')
 
 # generate graphs in 
 # generate output files in separate directory from
@@ -450,7 +450,7 @@ header='''
     <script src="static/js/v0.2/pbench_utils.js"></script>
   </head>
   <body class="with-3d-shadow with-transitions">
-    <h2 class="page-header">gluster volume profile - summary graphs</h2>
+    <h2 class="page-header">summary profile of application activity on one client</h2>
 '''
 
 trailer='''
