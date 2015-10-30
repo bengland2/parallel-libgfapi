@@ -7,31 +7,19 @@
 # copyright is GNU GPL V3, for details read:
 #   https://tldrlegal.com/license/gnu-general-public-license-v3-%28gpl-3%29#fulltext
 #
-# Note: this tool uses a snapshot of javascript code from this project:
-#   https://github.com/distributed-system-analysis/pbench
-# but we do not support any use of this software outside of the graphing 
-# of the data generated below.
-#
 # script to read gluster volume profile output retrieved every N seconds
 # and generate operation rate graph from it
 #
-# NOTE: this creates a LOT of .csv files
-# so the tool creates a subdirectory just for each run of this analysis tool.
-# the directory name is just the name of the log file
-# with the suffix '_csvdir'
+# see gvp-README.html in the same directory for directions on use.
 #
-# to install:
-#   - extract javascript code from this tarball
-#      https://s3.amazonaws.com/ben.england/gvp-graph-javascript.tgz
-#   - if the directory containing your gluster volume output log is different, create a
-#   'static' symlink pointing to the static/ subdirectory you just extracted
-#     in the subdirectories where .csv and .html files live, you will see a 
-#     'static' softlink pointing to this symlink.
+# Note: this tool uses a snapshot of javascript code from this project:
+#   https://github.com/distributed-system-analysis/pbench
+# but we do not support any use of this software outside of the graphing 
+# of the data generated below.  The Save Image button does not work yet
 #
 # input:
-#  this script expects input data to look like what this script produces:
-#
-#  https://raw.githubusercontent.com/bengland2/parallel-libgfapi/master/gvp.sh
+#  this script expects input data to look like what the gvp.sh script (in same
+#  directory) produces:
 #
 #  record 1 is a timestamp in format YYYY-MM-DD-HH-MM
 #  record 2 contains the user-specified sample interval and count
@@ -46,26 +34,6 @@
 #
 #  when we're all done reading in data,
 #  we then print it out in a format suitable for spreadsheet-based graphing
-#
-#  since we use pbench javascript graphing, then
-#  column 1 in the .csv is always the timestamp in milliseconds when
-#  that sample took place.  This can be disabled with the environment variable
-#  SKIP_PBENCH_GRAPHING.
-#
-#  the stat types are:
-#  - pct-lat - percentage latency consumed by this FOP (file operation)
-#  - avg-lat - average latency (usec)
-#  - min-lat - minimum latency (usec)
-#  - max-lat - maximum latency (usec)
-#  - call-rate - how many FOP requests have been processed per second
-#  for each category, there are several kinds of .csv files produced:
-#  - for each FOP + stat type, we show per-brick results
-#  and results across all bricks
-#  - for each stat type, across all bricks, show FOP stats together in
-#  ALL-BRICKS files
-#  - bytes read and bytes written across all bricks and in total
-#  - stat per brick per FOP and rolled up across all bricks
-#  - stat for entire volume by FOP
 #
 # internals:
 #
@@ -106,10 +74,12 @@ if os.getenv('SKIP_PBENCH_GRAPHING'): pbench_graphs = False
 # this is the list of graphs that will be produced
 
 graph_csvs = [
-    ('MBps-written', 'MB/sec written to Gluster bricks'), 
-    ('MBps-read', 'MB/sec read from Gluster bricks'),
     ('vol_call-rate_allfop', 'volume-level FOP call rates'),
-    ('vol_pct-lat_allfop', 'percentage server-side latency by FOP')
+    ('vol_pct-lat_allfop', 'percentage server-side latency by FOP'),
+    ('MBps-written-volume', 'MB/sec written to Gluster volume'), 
+    ('MBps-read-volume', 'MB/sec read from Gluster volume'),
+    ('MBps-written-bricks', 'MB/sec written to Gluster bricks'), 
+    ('MBps-read-bricks', 'MB/sec read from Gluster bricks')
 ]
 
 # all gvp.sh-generated profiles are expected to have these parameters
@@ -148,24 +118,24 @@ class BrickFopProfile:
     # use "-6.2f" instead of "%6.2f" so there are no leading spaces in record,
     # otherwise spreadsheet inserts colums at col. B
 
-    def write(self, file_handle, stat, duration):
+    def field2str(self, stat, duration):
         if stat == stat_names[0]:
-            file_handle.write('%-6.2f' % self.pct_lat)
+            return '%-6.2f' % self.pct_lat
         elif stat == stat_names[1]:
-            file_handle.write('%8.0f' % self.avg_lat)
+            return '%8.0f' % self.avg_lat
         elif stat == stat_names[2]:
             if self.min_lat == min_lat_infinity:
-                file_handle.write('')  # don't confuse spreadsheet/user
+                return ''  # don't confuse spreadsheet/user
             else:
-                file_handle.write('%8.0f' % self.min_lat)
+                return '%8.0f' % self.min_lat
         elif stat == stat_names[3]:
             if self.max_lat == 0:
-                file_handle.write('')
+                return ''
             else:
-                file_handle.write('%8.0f' % self.max_lat)
+                return '%8.0f' % self.max_lat
         elif stat == stat_names[4]:
             call_rate = self.calls / float(duration)
-            file_handle.write('%9.2d' % call_rate)
+            return '%9.2d' % call_rate
 
     # accumulate weighted sum of component profiles, will normalize them later
 
@@ -211,8 +181,8 @@ class BrickProfile:
         self.per_fop = {}
 
     def __str__(self):
-        return '%d, %d, %s' % (self.bytes_read, self.bytes_written,
-                               str(self.per_fop))
+        return '%d, %d, %s' % (
+            self.bytes_read, self.bytes_written, str(self.per_fop))
 
 
 # if there is an error parsing the input...
@@ -407,22 +377,28 @@ def get_interval(duration_type, interval_index):
         return expected_sample_interval
 
 # display bytes read and bytes written per brick and for entire volume
+# in separate graphs.  If we put them in the same graph in a volume with
+# 16 bricks, for example, all you'll see is the per-volume number
 # normalize to MB/s with 3 decimal places so 1 KB/s/brick will show
 
 def gen_output_bytes(out_dir_path, duration_type):
     bytes_per_MB = 1000000.0
     final_brick_ct = len(sorted_brick_names)
     for direction in directions:
+      per_vol_filename = direction + '-volume.csv'
+      per_vol_pathname = join(out_dir_path, per_vol_filename)
+      with open(per_vol_pathname, 'w') as total_transfer_fh:
         # when we support cumulative data, then we can name files this way
         #direction_filename = duration_type + '_' + direction + '.csv'
-        direction_filename = direction + '.csv'
-        direction_pathname = join(out_dir_path, direction_filename)
-        with open(direction_pathname, 'w') as transfer_fh:
+        per_brick_filename = direction + '-bricks.csv'
+        per_brick_pathname = join(out_dir_path, per_brick_filename)
+        with open(per_brick_pathname, 'w') as transfer_fh:
             if pbench_graphs: 
                 transfer_fh.write('timestamp_ms, ')
-            for k in range(0, final_brick_ct):
-                transfer_fh.write('%s, ' % sorted_brick_names[k])
-            transfer_fh.write('all\n')
+                total_transfer_fh.write('timestamp_ms, ')
+            transfer_fh.write(','.join(sorted_brick_names))
+            total_transfer_fh.write('all\n')
+            transfer_fh.write('\n')
             intvl = 0
             for bricks_in_interval in intervals:
                 if pbench_graphs:
@@ -430,6 +406,7 @@ def gen_output_bytes(out_dir_path, duration_type):
                 intvl += 1
                 rate_interval = get_interval(duration_type, intvl) 
                 total_transfer = 0
+                columns = []
                 for b in sorted_brick_names:  # for each brick
                     brick = bricks_in_interval[b]
                     if direction.__contains__('read'):
@@ -437,10 +414,11 @@ def gen_output_bytes(out_dir_path, duration_type):
                     else:
                         transfer = brick.bytes_written
                     total_transfer += transfer
-                    transfer_fh.write('%-8.3f, ' % 
-                        ((transfer/rate_interval)/bytes_per_MB))
-                transfer_fh.write('%-9.3f\n' % 
-                        ((total_transfer/rate_interval)/bytes_per_MB))
+                    columns.append( '%-8.3f ' % ((transfer/rate_interval)/bytes_per_MB))
+                transfer_fh.write(','.join(columns) + '\n')
+                total_transfer_fh.write('%d, %-9.3f\n' % (
+                        gen_timestamp_ms(intvl),
+                        (total_transfer/rate_interval)/bytes_per_MB))
 
 
 # display per-FOP (file operation) stats,
@@ -456,8 +434,7 @@ def gen_per_fop_stats(out_dir_path, duration_type, stat):
             hdr = ''
             if pbench_graphs:
                 hdr += 'timestamp_ms, '
-            for b in sorted_brick_names:
-                hdr += '%s,' % b
+            hdr += ','.join(sorted_brick_names)
             hdr += 'all\n'
             fop_fh.write(hdr)
             for i in range(0, len(intervals)):
@@ -465,24 +442,20 @@ def gen_per_fop_stats(out_dir_path, duration_type, stat):
                     fop_fh.write('%d, ' % gen_timestamp_ms(i))
                 bricks_in_interval = intervals[i]
                 all_bfprofile = zero_bfprofile()
+                columns = []
                 for b in sorted_brick_names:  # for each brick
                     brick = bricks_in_interval[b]
                     try:
                         fop_stats = brick.per_fop[fop + '.' + duration_type]
                     except KeyError:
                         fop_stats = zero_bfprofile()
-                    fop_stats.write(fop_fh, stat, brick.interval)
-                    fop_fh.write(',')
+                    columns.append(fop_stats.field2str(stat, brick.interval))
                     all_bfprofile.accumulate(fop_stats)
-
-                # combine results across all bricks for next column
-
-                all_bfprofile.normalize_sum()
-                all_bfprofile.write(fop_fh, stat, expected_sample_interval)
-                fop_fh.write('\n')
+                fop_fh.write('%s\n' % ','.join(columns))
 
                 # collect FOP results across all bricks for later
 
+                all_bfprofile.normalize_sum()
                 if len(vol_fop_intervals) == i:
                     vol_fop_interval = {}
                     vol_fop_intervals.append(vol_fop_interval)
@@ -497,8 +470,7 @@ def gen_fop_summary(dir_path, duration_type, stat, vol_fop_intervals):
     with open(vol_fop_profile_path, 'w') as vol_fop_fh:
         if pbench_graphs:
             vol_fop_fh.write('timestamp_ms, ')
-        for fop in sorted_fop_names:
-            vol_fop_fh.write('%s, ' % fop)
+        vol_fop_fh.write(','.join(sorted_fop_names))
         vol_fop_fh.write('\n')
         for i in range(0, len(vol_fop_intervals)):
             if pbench_graphs:
@@ -508,12 +480,13 @@ def gen_fop_summary(dir_path, duration_type, stat, vol_fop_intervals):
                 sample_interval = (i + 1) * expected_sample_interval
             else:
                 sample_interval = expected_sample_interval
+            columns = []
             for fop in sorted_fop_names:
                 per_vol_fop_profile = vol_fop_profile_interval[fop]
-                per_vol_fop_profile.write(
-                    vol_fop_fh, stat, sample_interval)
-                vol_fop_fh.write(', ')
-            vol_fop_fh.write('\n')
+                columns.append(
+                    per_vol_fop_profile.field2str(
+                        stat, sample_interval))
+            vol_fop_fh.write('%s\n' % ','.join(columns))
 
 
 # generate graphs in 
