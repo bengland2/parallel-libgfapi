@@ -69,7 +69,7 @@ if [ $threads -lt $count ] ; then count=$threads ; fi
 if [ $count = 0 ] ; then
   usage "not enough hosts in $sender_list"
 fi
-if [ `wc -l $sender_list` != `wc -l $receiver_list` ] ; then
+if [ `wc -l < $sender_list` != `wc -l < $receiver_list` ] ; then
   usage "$sender_list must have same number of records as $receiver_list"
 fi
 echo 'WARNING: DO NOT RUN THIS ON SYSTEM WHILE IT IS IN USE!!!'
