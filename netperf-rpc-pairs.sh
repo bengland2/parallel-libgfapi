@@ -165,10 +165,10 @@ for f in netperf_*_from_*_to_*.log ; do grep "$TEST_TIME\.00" $f | tail -2 ; don
 touch sent_sum.tmp rcvd_sum.tmp
 #awk '/16384/' n.tmp
 awk -v BYTES_PER_MB=$BYTES_PER_MEGABYTE \
-  'BEGIN{sum=0}/16384/{ if ((NF == 6) && ($1 == 16384)) sum += (($6*$4)/BYTES_PER_MB)}END{printf "%7.2f\n", sum}' \
+  'BEGIN{sum=0}{ if (NF == 6) sum += (($6*$4)/BYTES_PER_MB)}END{printf "%7.2f\n", sum}' \
   n.tmp > rcvd_sum.tmp
 awk -v BYTES_PER_MB=$BYTES_PER_MEGABYTE \
-  'BEGIN{sum=0}/16384/{ if ((NF == 6) && ($1 == 16384)) sum += (($6*$3)/BYTES_PER_MB)}END{printf "%7.2f\n", sum}' \
+  'BEGIN{sum=0}{ if (NF == 6) sum += (($6*$3)/BYTES_PER_MB)}END{printf "%7.2f\n", sum}' \
   n.tmp > sent_sum.tmp
 if [ "`wc -l sent_sum.tmp`" = 0 ] ; then
 	echo "netperf processes did not run"
